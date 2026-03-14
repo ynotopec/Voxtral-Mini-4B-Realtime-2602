@@ -260,11 +260,11 @@ graph LR
     B4 --> C2
 
     %% Timeline
-    A1 ==|16kHz|→ B2
-    B2 ==|80ms/token|→ B3
-    B3 ==|Parallel|→ B4
-    B4 ==|Streaming|→ C1
-    B4 ==|Chunking|→ C2
+    A1 ==>|16kHz| B2
+    B2 ==>|80ms/token| B3
+    B3 ==>|Parallel| B4
+    B4 ==>|Streaming| C1
+    B4 ==>|Chunking| C2
 
     %% Styling
     style A1 fill:#ffe0e0,stroke:#f00
