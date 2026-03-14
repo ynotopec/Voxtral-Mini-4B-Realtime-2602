@@ -260,11 +260,11 @@ graph LR
     B4 --> C2
 
     %% Timeline
-    A1 ==|16kHz|→ B2
-    B2 ==|80ms/token|→ B3
-    B3 ==|Parallel|→ B4
-    B4 ==|Streaming|→ C1
-    B4 ==|Chunking|→ C2
+    A1 ==>|16kHz| B2
+    B2 ==>|80ms/token| B3
+    B3 ==>|Parallel| B4
+    B4 ==>|Streaming| C1
+    B4 ==>|Chunking| C2
 
     %% Styling
     style A1 fill:#ffe0e0,stroke:#f00
@@ -455,16 +455,26 @@ flowchart TB
     S3 --> S4[Data Layer<br/>Encryption/Cache]
 
     %% Current Implementation
-    S1 [ ] - Not implémenté
-    S2 [ ] - Not implémenté
-    S3 [ ] - Non implémenté (CORS enabled all origins)
-    S4 [ ] - Non implémenté
+    C1["S1 status: ❌ Not implémenté"]
+    C2["S2 status: ❌ Not implémenté"]
+    C3["S3 status: ⚠️ Non implémenté (CORS enabled all origins)"]
+    C4["S4 status: ❌ Non implémenté"]
+
+    S1 -.-> C1
+    S2 -.-> C2
+    S3 -.-> C3
+    S4 -.-> C4
 
     %% Planned Implementation
-    S1[ ]🔒 HTTPS
-    S2[ ]🔐 Nginx RBAC
-    S3[ ]🔑 JWT Auth
-    S4[ ]💾 Redis Cache
+    P1["🔒 HTTPS"]
+    P2["🔐 Nginx RBAC"]
+    P3["🔑 JWT Auth"]
+    P4["💾 Redis Cache"]
+
+    C1 --> P1
+    C2 --> P2
+    C3 --> P3
+    C4 --> P4
 ```
 
 ### Protection
