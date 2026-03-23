@@ -84,3 +84,6 @@ tmp/
 *.flac
 *.ogg
 *.m4a
+.run/
+
+~/venv/
