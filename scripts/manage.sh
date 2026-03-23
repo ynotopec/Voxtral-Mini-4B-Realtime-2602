@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ACTION="${1:-}"
-PROJECT_NAME="${2:-$(basename "$PWD")}"
+ACTION="${1:-help}"
+PROJECT_NAME="${2:-$(basename "$PWD")}" 
 UP_IP="${3:-}"
 UP_PORT="${4:-}"
 
@@ -68,42 +68,44 @@ is_running() {
   kill -0 "${pid}" >/dev/null 2>&1
 }
 
+start_process() {
+  local name="$1"
+  local pid_file="$2"
+  local log_file="$3"
+  shift 3
+
+  mkdir -p "${PID_DIR}"
+  if is_running "${pid_file}"; then
+    echo "${name} already running (pid $(cat "${pid_file}"))"
+    return
+  fi
+
+  nohup "$@" > "${log_file}" 2>&1 &
+  echo $! > "${pid_file}"
+  echo "Started ${name} pid $(cat "${pid_file}")"
+}
+
 start_vllm() {
   local realtime_port="${REALTIME_PORT:-9000}"
   local model_id="${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}"
   local device="${DEVICE:-cuda:0}"
 
-  mkdir -p "${PID_DIR}"
-  if is_running "${VLLM_PID_FILE}"; then
-    echo "vLLM already running (pid $(cat "${VLLM_PID_FILE}"))"
-    return
-  fi
-
-  nohup "${VENV_DIR}/bin/vllm" serve "${model_id}" --port "${realtime_port}" --device "${device}" > "${PID_DIR}/vllm.log" 2>&1 &
-  echo $! > "${VLLM_PID_FILE}"
-  echo "Started vLLM pid $(cat "${VLLM_PID_FILE}")"
+  start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" \
+    "${VENV_DIR}/bin/vllm" serve "${model_id}" --port "${realtime_port}" --device "${device}"
 }
 
 start_api() {
   local host="${HOST:-0.0.0.0}"
   local port="${PORT:-8000}"
 
-  if [[ -n "${UP_IP}" ]]; then
-    host="${UP_IP}"
-  fi
-  if [[ -n "${UP_PORT}" ]]; then
-    port="${UP_PORT}"
-  fi
+  [[ -n "${UP_IP}" ]] && host="${UP_IP}"
+  [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
 
-  mkdir -p "${PID_DIR}"
-  if is_running "${API_PID_FILE}"; then
-    echo "API already running (pid $(cat "${API_PID_FILE}"))"
-    return
-  fi
+  start_process "API" "${API_PID_FILE}" "${PID_DIR}/api.log" \
+    env HOST="${host}" PORT="${port}" REALTIME_PORT="${REALTIME_PORT:-9000}" \
+    "${VENV_DIR}/bin/python" main.py
 
-  nohup env HOST="${host}" PORT="${port}" REALTIME_PORT="${REALTIME_PORT:-9000}" "${VENV_DIR}/bin/python" main.py > "${PID_DIR}/api.log" 2>&1 &
-  echo $! > "${API_PID_FILE}"
-  echo "Started API pid $(cat "${API_PID_FILE}") on ${host}:${port}"
+  echo "API available on ${host}:${port}"
 }
 
 stop_from_pid_file() {
@@ -126,6 +128,68 @@ stop_from_pid_file() {
   rm -f "${pid_file}"
 }
 
+print_service_status() {
+  local name="$1"
+  local pid_file="$2"
+  local log_file="$3"
+
+  if is_running "${pid_file}"; then
+    echo "${name}: running (pid $(cat "${pid_file}"))"
+  elif [[ -f "${pid_file}" ]]; then
+    echo "${name}: stale pid file ($(cat "${pid_file}"))"
+  else
+    echo "${name}: stopped"
+  fi
+
+  if [[ -f "${log_file}" ]]; then
+    echo "  log: ${log_file}"
+  fi
+}
+
+status() {
+  print_service_status "api" "${API_PID_FILE}" "${PID_DIR}/api.log"
+  print_service_status "vllm" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log"
+}
+
+logs() {
+  local service="${1:-all}"
+  case "${service}" in
+    api)
+      tail -n 80 "${PID_DIR}/api.log"
+      ;;
+    vllm)
+      tail -n 80 "${PID_DIR}/vllm.log"
+      ;;
+    all)
+      echo "=== api.log ==="
+      [[ -f "${PID_DIR}/api.log" ]] && tail -n 40 "${PID_DIR}/api.log" || echo "(missing)"
+      echo
+      echo "=== vllm.log ==="
+      [[ -f "${PID_DIR}/vllm.log" ]] && tail -n 40 "${PID_DIR}/vllm.log" || echo "(missing)"
+      ;;
+    *)
+      echo "Unknown service '${service}'. Use: api|vllm|all" >&2
+      exit 1
+      ;;
+  esac
+}
+
+usage() {
+  cat <<'EOT'
+Usage: scripts/manage.sh <action> [project_name] [ip] [port]
+
+Actions:
+  install   Create venv, bootstrap .env, and install dependencies
+  up        Start vLLM + API
+  down      Stop API + vLLM
+  restart   Restart API + vLLM
+  upgrade   Upgrade dependencies
+  status    Show process and log status
+  logs      Show logs (pass api|vllm|all as arg #3)
+  help      Show this help
+EOT
+}
+
 case "${ACTION}" in
   install)
     create_venv
@@ -142,13 +206,27 @@ case "${ACTION}" in
     stop_from_pid_file "api" "${API_PID_FILE}"
     stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
     ;;
+  restart)
+    stop_from_pid_file "api" "${API_PID_FILE}"
+    stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
+    create_venv
+    read_env
+    start_vllm
+    start_api
+    ;;
   upgrade)
     create_venv
     ensure_env_file
     "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --upgrade -r requirements.txt
     ;;
-  *)
-    echo "Usage: $0 {install|up|down|upgrade} [project_name] [ip] [port]" >&2
-    exit 1
+  status)
+    status
+    ;;
+  logs)
+    logs "${3:-all}"
+    ;;
+  help|*)
+    usage
+    [[ "${ACTION}" == "help" ]] || exit 1
     ;;
 esac

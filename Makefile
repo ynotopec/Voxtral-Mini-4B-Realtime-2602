@@ -1,36 +1,53 @@
 PROJECT_NAME := $(notdir $(CURDIR))
-VENV_DIR ?= $(HOME)/venv/$(PROJECT_NAME)
-UV ?= uv
-PYTHON ?= $(VENV_DIR)/bin/python
-PIP ?= $(VENV_DIR)/bin/pip
-MODEL ?= mistralai/Voxtral-Mini-4B-Realtime-2602
-DEVICE ?= cuda:0
-REALTIME_PORT ?= 9000
-API_PORT ?= 8000
-API_HOST ?= 0.0.0.0
+MANAGE := ./scripts/manage.sh
+PYTHON ?= $(HOME)/venv/$(PROJECT_NAME)/bin/python
 
 # Support positional usage: make up [IP] [PORT]
 UP_IP := $(word 2,$(MAKECMDGOALS))
 UP_PORT := $(word 3,$(MAKECMDGOALS))
+LOG_SERVICE := $(or $(word 2,$(MAKECMDGOALS)),all)
 
-.PHONY: install up down upgrade check
+.PHONY: help install up down restart upgrade status logs check clean
+
+help:
+	@echo "Targets:"
+	@echo "  make install            # create venv + install deps"
+	@echo "  make up [IP] [PORT]     # start vLLM + API"
+	@echo "  make down               # stop services"
+	@echo "  make restart            # restart services"
+	@echo "  make status             # service status"
+	@echo "  make logs [api|vllm]    # tail logs"
+	@echo "  make check              # compile/syntax check"
+	@echo "  make clean              # remove runtime artifacts"
 
 install:
-	./scripts/manage.sh install "$(PROJECT_NAME)"
+	$(MANAGE) install "$(PROJECT_NAME)"
 
 up:
-	./scripts/manage.sh up "$(PROJECT_NAME)" "$(UP_IP)" "$(UP_PORT)"
-
-# absorb positional arguments as no-op targets
-%:
-	@:
+	$(MANAGE) up "$(PROJECT_NAME)" "$(UP_IP)" "$(UP_PORT)"
 
 down:
-	./scripts/manage.sh down "$(PROJECT_NAME)"
+	$(MANAGE) down "$(PROJECT_NAME)"
+
+restart:
+	$(MANAGE) restart "$(PROJECT_NAME)" "$(UP_IP)" "$(UP_PORT)"
 
 upgrade:
-	./scripts/manage.sh upgrade "$(PROJECT_NAME)"
+	$(MANAGE) upgrade "$(PROJECT_NAME)"
+
+status:
+	$(MANAGE) status "$(PROJECT_NAME)"
+
+logs:
+	$(MANAGE) logs "$(PROJECT_NAME)" "$(LOG_SERVICE)"
 
 check:
 	$(PYTHON) -m compileall main.py client_example.py
 	$(PYTHON) -m py_compile main.py client_example.py
+
+clean:
+	rm -rf .run __pycache__ .pytest_cache
+
+# absorb positional arguments as no-op targets
+%:
+	@:
