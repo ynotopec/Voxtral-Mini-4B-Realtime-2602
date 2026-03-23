@@ -1,39 +1,54 @@
-# Voxtral Realtime API
+# Voxtral Realtime API (vLLM)
 
 FastAPI gateway compatible with OpenAI Realtime endpoints for `mistralai/Voxtral-Mini-4B-Realtime-2602`.
+
+## Requirements
+
+- Python 3.10+
+- [`uv`](https://docs.astral.sh/uv/)
+- CUDA-capable environment for vLLM runtime
 
 ## Quick start
 
 ```bash
-make setup
-make run
+make install
+make up
 ```
 
-By default, the API starts on `http://0.0.0.0:8000` and proxies realtime traffic to `ws://localhost:9000`.
+The stack launches:
+- vLLM realtime backend (`REALTIME_PORT`, default `9000`)
+- FastAPI gateway (`HOST`/`PORT`, defaults `0.0.0.0:8000`)
 
-## Automated commands
+## Make targets
 
 ```bash
-make setup      # install dependencies
-make run        # start API server
-make dev        # start API server with auto-reload
-make check      # run syntax and import checks
-make example    # run sample client
+make install            # create ~/venv/<repo-name>, install deps, bootstrap .env
+make up                 # start vLLM + API using .env
+make up 0.0.0.0 8100    # positional override for API host/port
+make down               # stop API + vLLM
+make upgrade            # upgrade dependency set in existing venv
+make check              # compile + syntax checks
 ```
 
-## Typical runtime
+The workflow is idempotent:
+- existing venv is reused
+- existing `.env` is preserved
+- `make up` avoids duplicate process launches if pid files are still alive
 
-1. Start vLLM realtime backend (port `9000`):
+## Environment configuration
+
+Copy/edit `.env` from `.env.example`:
 
 ```bash
-vllm serve mistralai/Voxtral-Mini-4B-Realtime-2602 --port 9000 --device cuda:0
+cp .env.example .env
 ```
 
-2. Start this gateway:
-
-```bash
-make run
-```
+Variables:
+- `HOST` (API bind host)
+- `PORT` (API bind port)
+- `REALTIME_PORT` (vLLM serve port)
+- `MODEL_ID` (model to serve)
+- `DEVICE` (e.g. `cuda:0`)
 
 ## API surface
 
@@ -41,8 +56,3 @@ make run
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `WS /v1/realtime`
-
-## Notes
-
-- CORS is open (`*`) by default.
-- Configure host/port/realtime target via environment variables (`HOST`, `PORT`, `REALTIME_PORT`).
