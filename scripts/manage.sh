@@ -56,6 +56,13 @@ install_deps() {
   "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" -r requirements.txt
 }
 
+ensure_runtime_deps() {
+  if ! "${VENV_DIR}/bin/python" -c "import vllm, pyairports" >/dev/null 2>&1; then
+    echo "Missing runtime dependencies; installing from requirements.txt..."
+    install_deps
+  fi
+}
+
 read_env() {
   ensure_env_file
   set -a
@@ -203,6 +210,7 @@ case "${ACTION}" in
   up)
     create_venv
     read_env
+    ensure_runtime_deps
     start_vllm
     start_api
     ;;
@@ -215,6 +223,7 @@ case "${ACTION}" in
     stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
     create_venv
     read_env
+    ensure_runtime_deps
     start_vllm
     start_api
     ;;
