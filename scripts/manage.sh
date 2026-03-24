@@ -13,6 +13,8 @@ ENV_EXAMPLE_FILE=".env.example"
 PID_DIR=".run"
 VLLM_PID_FILE="${PID_DIR}/vllm.pid"
 API_PID_FILE="${PID_DIR}/api.pid"
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
 
 ensure_uv() {
   if ! command -v "${UV_BIN}" >/dev/null 2>&1; then
@@ -224,8 +226,74 @@ Actions:
   upgrade   Upgrade dependencies
   status    Show process and log status
   logs      Show logs (pass api|vllm|all as arg #3)
+  systemd-install   Install and start a systemd user service (uses [ip] [port] if provided)
+  systemd-remove    Stop and remove the systemd user service
   help      Show this help
 EOT
+}
+
+ensure_systemd_user_ready() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl is required but not found on this machine." >&2
+    exit 1
+  fi
+}
+
+install_systemd_user_service() {
+  ensure_systemd_user_ready
+  create_venv
+  read_env
+
+  local host="${HOST:-0.0.0.0}"
+  local port="${PORT:-8000}"
+
+  [[ -n "${UP_IP}" ]] && host="${UP_IP}"
+  [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
+
+  mkdir -p "${SYSTEMD_USER_DIR}" "${PID_DIR}"
+
+  cat > "${SYSTEMD_UNIT_FILE}" <<EOT
+[Unit]
+Description=${PROJECT_NAME} API + vLLM service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PWD}
+Environment=HOST=${host}
+Environment=PORT=${port}
+Environment=REALTIME_PORT=${REALTIME_PORT:-9000}
+Environment=MODEL_ID=${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}
+Environment=DEVICE=${DEVICE:-cuda:0}
+ExecStart=${PWD}/scripts/manage.sh up ${PROJECT_NAME} ${host} ${port}
+ExecStop=${PWD}/scripts/manage.sh down ${PROJECT_NAME}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOT
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now "${PROJECT_NAME}.service"
+
+  echo "Installed and started systemd user service: ${PROJECT_NAME}.service"
+  echo "Host/port configured: ${host}:${port}"
+  echo "Unit file: ${SYSTEMD_UNIT_FILE}"
+}
+
+remove_systemd_user_service() {
+  ensure_systemd_user_ready
+
+  if systemctl --user list-unit-files | awk '{print $1}' | grep -qx "${PROJECT_NAME}.service"; then
+    systemctl --user disable --now "${PROJECT_NAME}.service" || true
+  fi
+
+  rm -f "${SYSTEMD_UNIT_FILE}"
+  systemctl --user daemon-reload
+  systemctl --user reset-failed
+  echo "Removed systemd user service: ${PROJECT_NAME}.service"
 }
 
 case "${ACTION}" in
@@ -264,6 +332,12 @@ case "${ACTION}" in
     ;;
   logs)
     logs "${3:-all}"
+    ;;
+  systemd-install)
+    install_systemd_user_service
+    ;;
+  systemd-remove)
+    remove_systemd_user_service
     ;;
   help|*)
     usage
