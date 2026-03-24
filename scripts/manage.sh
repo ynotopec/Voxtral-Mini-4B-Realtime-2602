@@ -56,6 +56,40 @@ install_deps() {
   "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" -r requirements.txt
 }
 
+ensure_pyairports_module() {
+  if "${VENV_DIR}/bin/python" -c "import pyairports.airports" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "pyairports import still missing; installing a compatibility stub in venv..."
+  "${VENV_DIR}/bin/python" - <<'PY'
+from pathlib import Path
+import sysconfig
+
+purelib = Path(sysconfig.get_paths()["purelib"])
+pkg_dir = purelib / "pyairports"
+pkg_dir.mkdir(parents=True, exist_ok=True)
+
+(pkg_dir / "__init__.py").write_text(
+    "from .airports import AIRPORT_LIST\n",
+    encoding="utf-8",
+)
+(pkg_dir / "airports.py").write_text(
+    "AIRPORT_LIST = []\n",
+    encoding="utf-8",
+)
+PY
+}
+
+ensure_runtime_deps() {
+  if ! "${VENV_DIR}/bin/python" -c "import vllm" >/dev/null 2>&1; then
+    echo "Missing runtime dependencies; installing from requirements.txt..."
+    install_deps
+  fi
+
+  ensure_pyairports_module
+}
+
 read_env() {
   ensure_env_file
   set -a
@@ -203,6 +237,7 @@ case "${ACTION}" in
   up)
     create_venv
     read_env
+    ensure_runtime_deps
     start_vllm
     start_api
     ;;
@@ -215,6 +250,7 @@ case "${ACTION}" in
     stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
     create_venv
     read_env
+    ensure_runtime_deps
     start_vllm
     start_api
     ;;
