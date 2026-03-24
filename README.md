@@ -9,7 +9,7 @@ make install
 make up
 ```
 
-`make up` and `make restart` verify that core runtime dependencies (including `vllm` and `pyairports`) are installed in the project venv, and will self-heal by reinstalling `requirements.txt` if needed.
+`make up` and `make restart` verify that core runtime dependencies are installed in the project venv, and self-heal if needed. If `pyairports` cannot be resolved from package indexes, startup installs a tiny compatibility module so vLLM can import `outlines` successfully.
 
 ## Day-2 operations
 
