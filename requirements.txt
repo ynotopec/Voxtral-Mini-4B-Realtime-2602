@@ -6,3 +6,4 @@ python-multipart==0.0.9
 python-dotenv==1.0.0
 numpy==1.26.3
 vllm
+pyairports
