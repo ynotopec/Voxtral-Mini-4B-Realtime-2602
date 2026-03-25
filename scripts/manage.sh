@@ -40,7 +40,7 @@ ensure_env_example() {
 HOST=0.0.0.0
 PORT=8000
 MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
-DEVICE=cuda:0
+DEVICE=cuda
 VLLM_API_KEY=
 SYSTEMD_USER=
 EOT
@@ -187,18 +187,30 @@ start_vllm() {
   local host="${HOST:-0.0.0.0}"
   local port="${PORT:-8000}"
   local model_id="${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}"
-  local device="${DEVICE:-cuda:0}"
+  local device_raw="${DEVICE:-cuda}"
+  local device="${device_raw}"
   local api_key="${VLLM_API_KEY:-}"
+  local cuda_visible_devices=""
 
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
   [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
+
+  # vLLM accepts --device cuda (not cuda:0). Keep compatibility with DEVICE=cuda:<gpu_id>.
+  if [[ "${device_raw}" =~ ^cuda:([0-9]+)$ ]]; then
+    cuda_visible_devices="${BASH_REMATCH[1]}"
+    device="cuda"
+  fi
 
   local cmd=("${VENV_DIR}/bin/vllm" serve "${model_id}" --host "${host}" --port "${port}" --device "${device}")
   if [[ -n "${api_key}" ]]; then
     cmd+=(--api-key "${api_key}")
   fi
 
-  start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${cmd[@]}"
+  if [[ -n "${cuda_visible_devices}" ]]; then
+    start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" env CUDA_VISIBLE_DEVICES="${cuda_visible_devices}" "${cmd[@]}"
+  else
+    start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${cmd[@]}"
+  fi
 
   # Validate that the process survives initial startup before claiming availability.
   local pid

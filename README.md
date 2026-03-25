@@ -57,7 +57,7 @@ Variables:
 - `HOST` (vLLM bind host)
 - `PORT` (vLLM bind port)
 - `MODEL_ID` (model to serve)
-- `DEVICE` (e.g. `cuda:0`)
+- `DEVICE` (e.g. `cuda`; `cuda:0` is also accepted and mapped to `CUDA_VISIBLE_DEVICES=0`)
 - `VLLM_API_KEY` (optional API key passed to `vllm serve --api-key`)
 - `SYSTEMD_USER` (Linux user account that the systemd service should run as; defaults to current user)
 
