@@ -43,7 +43,6 @@ MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
 DEVICE=cuda
 VLLM_API_KEY=
 VLLM_DISABLE_COMPILE_CACHE=1
-VLLM_COMPILATION_CONFIG='{"cudagraph_mode":"PIECEWISE"}'
 SYSTEMD_USER=
 EOT
   fi
@@ -194,7 +193,6 @@ start_vllm() {
   local device="${device_raw}"
   local api_key="${VLLM_API_KEY:-}"
   local vllm_disable_compile_cache="${VLLM_DISABLE_COMPILE_CACHE:-1}"
-  local vllm_compilation_config="${VLLM_COMPILATION_CONFIG:-{\"cudagraph_mode\":\"PIECEWISE\"}}"
   local cuda_visible_devices=""
 
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
@@ -210,10 +208,6 @@ start_vllm() {
   if [[ -n "${api_key}" ]]; then
     cmd+=(--api-key "${api_key}")
   fi
-  if [[ -n "${vllm_compilation_config}" ]]; then
-    cmd+=(--compilation_config "${vllm_compilation_config}")
-  fi
-
   local env_cmd=(env)
   if [[ -n "${cuda_visible_devices}" ]]; then
     env_cmd+=("CUDA_VISIBLE_DEVICES=${cuda_visible_devices}")
