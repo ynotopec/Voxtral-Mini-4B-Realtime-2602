@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_BASENAME="$(basename "$SCRIPT_DIR")"
+VENV_DIR="${HOME}/venv/${PROJECT_BASENAME}"
+ENV_FILE="${SCRIPT_DIR}/.env"
+LOG_DIR="${SCRIPT_DIR}/.run"
+LOG_FILE="${LOG_DIR}/server.log"
+PID_FILE="${LOG_DIR}/server.pid"
+
+mkdir -p "$LOG_DIR"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
+
+load_env() {
+  [[ -f "$ENV_FILE" ]] || die "Missing ${ENV_FILE}"
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+
+  : "${HF_TOKEN:?HF_TOKEN is required in .env}"
+  : "${MODEL_ID:=mistralai/Voxtral-Mini-4B-Realtime-2602}"
+
+  HOST="${HOST:-0.0.0.0}"
+  PORT="${PORT:-8000}"
+
+  : "${VLLM_API_KEY:=token-voxtral-local}"
+  : "${CUDA_VISIBLE_DEVICES:=0}"
+  : "${HF_HOME:=${HOME}/.cache/huggingface}"
+  : "${MAX_MODEL_LEN:=131072}"
+  : "${MAX_NUM_BATCHED_TOKENS:=4096}"
+  : "${GPU_MEMORY_UTILIZATION:=0.90}"
+  : "${CPU_OFFLOAD_GB:=0}"
+
+  export HF_TOKEN MODEL_ID HOST PORT VLLM_API_KEY CUDA_VISIBLE_DEVICES HF_HOME
+  export MAX_MODEL_LEN MAX_NUM_BATCHED_TOKENS
+  export GPU_MEMORY_UTILIZATION CPU_OFFLOAD_GB
+}
+
+venv_python() { echo "${VENV_DIR}/bin/python"; }
+venv_uv() { echo "${VENV_DIR}/bin/uv"; }
+venv_vllm() { echo "${VENV_DIR}/bin/vllm"; }
+
+create_venv() {
+  need_cmd python3
+  if [[ ! -x "$(venv_python)" ]]; then
+    python3 -m venv "$VENV_DIR"
+  fi
+}
+
+install_deps() {
+  create_venv
+  # shellcheck disable=SC1091
+  source "${VENV_DIR}/bin/activate"
+
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install --upgrade uv
+
+  # Nightly vLLM as requested by the model documentation.
+  uv pip install -p "$(venv_python)" -U vllm --pre --extra-index-url https://wheels.vllm.ai/nightly
+
+  # Required audio libs from the model card.
+  uv pip install -p "$(venv_python)" -U soxr librosa soundfile websockets numpy
+
+  # Recommended by the model card to reduce warnings.
+  uv pip install -p "$(venv_python)" --upgrade transformers
+}
+
+login_hf() {
+  mkdir -p "${HF_HOME}"
+  if [[ ! -f "${HF_HOME}/token" ]]; then
+    "${VENV_DIR}/bin/huggingface-cli" login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null 2>&1 || true
+  fi
+}
+
+is_running() {
+  [[ -f "$PID_FILE" ]] || return 1
+  local pid
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+start_server() {
+  load_env
+  install_deps
+  login_hf
+
+  if is_running; then
+    echo "Already running (pid $(cat "$PID_FILE"))"
+    return 0
+  fi
+
+  export CUDA_VISIBLE_DEVICES HF_HOME HF_TOKEN
+
+  nohup "$(venv_vllm)" serve "${MODEL_ID}" \
+    --host "${HOST}" \
+    --port "${PORT}" \
+    --api-key "${VLLM_API_KEY}" \
+    --max-model-len "${MAX_MODEL_LEN}" \
+    --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
+    --cpu-offload-gb "${CPU_OFFLOAD_GB}" \
+    --compilation_config '{"cudagraph_mode": "PIECEWISE"}' \
+    >"${LOG_FILE}" 2>&1 &
+
+  echo $! >"${PID_FILE}"
+  sleep 2
+
+  if is_running; then
+    echo "Started (pid $(cat "$PID_FILE"))"
+    echo "HTTP: http://${HOST}:${PORT}/v1"
+    echo "Realtime WS: ws://${HOST}:${PORT}/v1/realtime"
+  else
+    tail -n 100 "${LOG_FILE}" || true
+    exit 1
+  fi
+}
+
+stop_server() {
+  if ! is_running; then
+    echo "Not running"
+    rm -f "$PID_FILE"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$PID_FILE")"
+  kill "$pid" 2>/dev/null || true
+
+  for _ in {1..20}; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$PID_FILE"
+  echo "Stopped"
+}
+
+status_server() {
+  load_env
+  if is_running; then
+    echo "RUNNING pid=$(cat "$PID_FILE")"
+    echo "HTTP: http://${HOST}:${PORT}/v1"
+    echo "Realtime WS: ws://${HOST}:${PORT}/v1/realtime"
+  else
+    echo "STOPPED"
+  fi
+}
+
+logs_server() {
+  touch "$LOG_FILE"
+  tail -n 100 -f "$LOG_FILE"
+}
+
+case "${1:-up}" in
+  up|start) start_server ;;
+  install) load_env; install_deps; login_hf ;;
+  stop) stop_server ;;
+  restart) stop_server; start_server ;;
+  status) status_server ;;
+  logs) logs_server ;;
+  *)
+    echo "Usage: ./run.sh {up|start|install|stop|restart|status|logs}"
+    exit 1
+    ;;
+esac
