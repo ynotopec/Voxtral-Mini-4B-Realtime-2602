@@ -108,18 +108,55 @@ is_running() {
   kill -0 "${pid}" >/dev/null 2>&1 || return 1
 
   # Ensure the pid belongs to a vLLM serve process, not an unrelated reused pid.
+  is_vllm_server_pid "${pid}"
+}
+
+is_vllm_server_pid() {
+  local pid="$1"
   local cmdline
   cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-  [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *"serve"* ]]
+
+  # Started via CLI: "vllm serve <model>"
+  if [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *" serve "* ]]; then
+    return 0
+  fi
+
+  # Some launches re-exec as a python module.
+  if [[ "${cmdline}" == *"vllm.entrypoints.openai.api_server"* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+find_vllm_descendant_pid() {
+  local parent_pid="$1"
+  local child
+  local children_file="/proc/${parent_pid}/task/${parent_pid}/children"
+  [[ -r "${children_file}" ]] || return 1
+
+  # shellcheck disable=SC2207
+  local children=($(cat "${children_file}"))
+  for child in "${children[@]}"; do
+    [[ -n "${child}" ]] || continue
+    if is_vllm_server_pid "${child}"; then
+      echo "${child}"
+      return 0
+    fi
+    if find_vllm_descendant_pid "${child}" >/dev/null 2>&1; then
+      find_vllm_descendant_pid "${child}"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 find_running_vllm_pid() {
   local pid
   for pid in /proc/[0-9]*; do
     pid="${pid#/proc/}"
-    local cmdline
-    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-    if [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *" serve "* ]]; then
+    if is_vllm_server_pid "${pid}"; then
       echo "${pid}"
       return 0
     fi
@@ -164,8 +201,16 @@ start_vllm() {
   # Validate that the process survives initial startup before claiming availability.
   local pid
   pid="$(cat "${VLLM_PID_FILE}")"
+  local resolved_pid="${pid}"
   local tries=0
   while (( tries < 10 )); do
+    if find_vllm_descendant_pid "${pid}" >/dev/null 2>&1; then
+      resolved_pid="$(find_vllm_descendant_pid "${pid}")"
+      if [[ "${resolved_pid}" != "$(cat "${VLLM_PID_FILE}")" ]]; then
+        echo "${resolved_pid}" > "${VLLM_PID_FILE}"
+      fi
+    fi
+
     if is_running "${VLLM_PID_FILE}"; then
       echo "vLLM available on ${host}:${port}"
       return 0
