@@ -11,14 +11,14 @@ UP_PORT := $(word 3,$(MAKECMDGOALS))
 help:
 	@echo "Targets:"
 	@echo "  make install            # create venv + install deps"
-	@echo "  make uninstall          # stop service + remove venv/.run/systemd user unit"
+	@echo "  make uninstall          # stop service + remove venv/.run/systemd unit"
 	@echo "  make up [IP] [PORT]     # start vLLM OpenAI-compatible server"
 	@echo "  make down               # stop vLLM"
 	@echo "  make restart            # restart vLLM"
 	@echo "  make status             # service status"
 	@echo "  make logs               # tail vLLM logs"
-	@echo "  make systemd-install [IP] [PORT]  # install/start systemd user service"
-	@echo "  make systemd-remove     # uninstall/stop systemd user service"
+	@echo "  make systemd-install [IP] [PORT]  # install/start sudo system service"
+	@echo "  make systemd-remove     # uninstall/stop sudo system service"
 	@echo "  make check              # compile/syntax check"
 	@echo "  make clean              # remove runtime artifacts"
 

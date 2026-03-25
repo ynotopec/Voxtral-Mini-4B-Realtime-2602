@@ -12,8 +12,8 @@ ENV_FILE=".env"
 ENV_EXAMPLE_FILE=".env.example"
 PID_DIR=".run"
 VLLM_PID_FILE="${PID_DIR}/vllm.pid"
-SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
-SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
+SYSTEMD_SYSTEM_DIR="/etc/systemd/system"
+SYSTEMD_UNIT_FILE="${SYSTEMD_SYSTEM_DIR}/${PROJECT_NAME}.service"
 SYSTEMD_USER_NAME="${USER:-$(id -un)}"
 
 ensure_uv() {
@@ -278,15 +278,15 @@ Usage: scripts/manage.sh <action> [project_name] [ip] [port]
 
 Actions:
   install   Create venv, bootstrap .env, and install dependencies
-  uninstall Stop services and remove local runtime artifacts (venv, pid/logs, systemd user unit)
+  uninstall Stop services and remove local runtime artifacts (venv, pid/logs, systemd unit)
   up        Start vLLM OpenAI-compatible server
   down      Stop vLLM
   restart   Restart vLLM
   upgrade   Upgrade dependencies
   status    Show vLLM process and log status
   logs      Show vLLM logs
-  systemd-install   Install and start a systemd user service (uses [ip] [port] if provided)
-  systemd-remove    Stop and remove the systemd user service
+  systemd-install   Install and start a systemd service in /etc/systemd/system (uses [ip] [port] if provided)
+  systemd-remove    Stop and remove the systemd service from /etc/systemd/system
   help      Show this help
 EOT
 }
@@ -317,30 +317,22 @@ resolve_systemd_paths() {
     target_user="${USER:-$(id -un)}"
   fi
 
-  local target_home
-  target_home="$(getent passwd "${target_user}" | cut -d: -f6 || true)"
-  if [[ -z "${target_home}" ]]; then
-    echo "Could not resolve home directory for SYSTEMD_USER=${target_user}" >&2
+  if ! id -u "${target_user}" >/dev/null 2>&1; then
+    echo "Could not resolve SYSTEMD_USER=${target_user}" >&2
     exit 1
   fi
 
   SYSTEMD_USER_NAME="${target_user}"
-  SYSTEMD_USER_DIR="${target_home}/.config/systemd/user"
-  SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
+  SYSTEMD_UNIT_FILE="${SYSTEMD_SYSTEM_DIR}/${PROJECT_NAME}.service"
 }
 
 systemctl_user_cmd() {
-  if [[ "${SYSTEMD_USER_NAME}" == "${USER:-$(id -un)}" ]]; then
-    systemctl --user "$@"
-    return
-  fi
-
   if command -v sudo >/dev/null 2>&1; then
-    sudo -u "${SYSTEMD_USER_NAME}" systemctl --user "$@"
+    sudo systemctl "$@"
     return
   fi
 
-  echo "sudo is required to manage SYSTEMD_USER=${SYSTEMD_USER_NAME} from this account." >&2
+  echo "sudo is required to manage systemd services in ${SYSTEMD_SYSTEM_DIR}." >&2
   exit 1
 }
 
@@ -356,9 +348,12 @@ install_systemd_user_service() {
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
   [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
 
-  mkdir -p "${SYSTEMD_USER_DIR}" "${PID_DIR}"
+  mkdir -p "${PID_DIR}"
 
-  cat > "${SYSTEMD_UNIT_FILE}" <<EOT
+  local tmp_unit_file
+  tmp_unit_file="$(mktemp)"
+
+  cat > "${tmp_unit_file}" <<EOT
 [Unit]
 Description=${PROJECT_NAME} vLLM OpenAI-compatible server
 After=network-online.target
@@ -366,6 +361,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=${SYSTEMD_USER_NAME}
 WorkingDirectory=${PWD}
 ExecStart=${PWD}/scripts/manage.sh up ${PROJECT_NAME} ${host} ${port}
 ExecStop=${PWD}/scripts/manage.sh down ${PROJECT_NAME}
@@ -373,13 +369,22 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOT
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo install -m 0644 "${tmp_unit_file}" "${SYSTEMD_UNIT_FILE}"
+  else
+    rm -f "${tmp_unit_file}"
+    echo "sudo is required to install ${SYSTEMD_UNIT_FILE}" >&2
+    exit 1
+  fi
+  rm -f "${tmp_unit_file}"
 
   systemctl_user_cmd daemon-reload
   systemctl_user_cmd enable --now "${PROJECT_NAME}.service"
 
-  echo "Installed and started systemd user service: ${PROJECT_NAME}.service (user: ${SYSTEMD_USER_NAME})"
+  echo "Installed and started systemd service: ${PROJECT_NAME}.service (runs as user: ${SYSTEMD_USER_NAME})"
   echo "Host/port configured: ${host}:${port}"
   echo "Unit file: ${SYSTEMD_UNIT_FILE}"
 }
@@ -393,10 +398,15 @@ remove_systemd_user_service() {
     systemctl_user_cmd disable --now "${PROJECT_NAME}.service" || true
   fi
 
-  rm -f "${SYSTEMD_UNIT_FILE}"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo rm -f "${SYSTEMD_UNIT_FILE}"
+  else
+    echo "sudo is required to remove ${SYSTEMD_UNIT_FILE}" >&2
+    exit 1
+  fi
   systemctl_user_cmd daemon-reload
   systemctl_user_cmd reset-failed
-  echo "Removed systemd user service: ${PROJECT_NAME}.service (user: ${SYSTEMD_USER_NAME})"
+  echo "Removed systemd service: ${PROJECT_NAME}.service"
 }
 
 case "${ACTION}" in
