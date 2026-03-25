@@ -104,7 +104,27 @@ is_running() {
   [[ -f "${pid_file}" ]] || return 1
   local pid
   pid="$(cat "${pid_file}")"
-  kill -0 "${pid}" >/dev/null 2>&1
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "${pid}" >/dev/null 2>&1 || return 1
+
+  # Ensure the pid belongs to a vLLM serve process, not an unrelated reused pid.
+  local cmdline
+  cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+  [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *"serve"* ]]
+}
+
+find_running_vllm_pid() {
+  local pid
+  for pid in /proc/[0-9]*; do
+    pid="${pid#/proc/}"
+    local cmdline
+    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    if [[ "${cmdline}" == *"/bin/vllm"* && "${cmdline}" == *" serve "* ]]; then
+      echo "${pid}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 start_process() {
@@ -166,6 +186,10 @@ stop_from_pid_file() {
 status() {
   if is_running "${VLLM_PID_FILE}"; then
     echo "vllm: running (pid $(cat "${VLLM_PID_FILE}"))"
+  elif find_running_vllm_pid >/dev/null 2>&1; then
+    local detected_pid
+    detected_pid="$(find_running_vllm_pid)"
+    echo "vllm: running (pid ${detected_pid}, discovered from process table; pid file missing or stale)"
   elif [[ -f "${VLLM_PID_FILE}" ]]; then
     echo "vllm: stale pid file ($(cat "${VLLM_PID_FILE}"))"
   else
