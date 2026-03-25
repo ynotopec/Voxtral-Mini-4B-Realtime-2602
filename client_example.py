@@ -28,7 +28,7 @@ async def example_text_mode():
                     print("\n✅ Session créée!")
                     print("\n📤 Envoi d'une requête de transcription...")
 
-                    ws.send(json.dumps({
+                    await ws.send(json.dumps({
                         "type": "response.create",
                         "model": model_id,
                         "input": "Bonjour, comment allez-vous aujourd'hui?",
@@ -37,7 +37,7 @@ async def example_text_mode():
 
                 elif data.get("type") == "response.output_audio_done":
                     print("\n✅ Réponse terminée!")
-                    ws.send(json.dumps({
+                    await ws.send(json.dumps({
                         "type": "response.stop"
                     }))
 
@@ -85,12 +85,12 @@ async def example_audio_mode():
                     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
                     print("📤 Envoi d'audio de test...")
-                    ws.send(json.dumps({
+                    await ws.send(json.dumps({
                         "type": "input_audio_buffer.append",
                         "audio": audio_base64
                     }))
 
-                    ws.send(json.dumps({
+                    await ws.send(json.dumps({
                         "type": "response.create",
                         "model": model_id,
                         "input": "",
@@ -162,7 +162,7 @@ async def example_streaming_audio():
                 audio_bytes = bytearray(audio_data, dtype=np.int16)
                 audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-                ws.send(json.dumps({
+                await ws.send(json.dumps({
                     "type": "input_audio_buffer.append",
                     "audio": audio_base64
                 }))
@@ -177,13 +177,13 @@ async def example_streaming_audio():
                     pass
 
             print("\n✅ Streaming terminé!")
-            ws.send(json.dumps({
+            await ws.send(json.dumps({
                 "type": "response.stop"
             }))
 
         except KeyboardInterrupt:
             print("\n🔇 Arrêt du streaming...")
-            ws.send(json.dumps({
+            await ws.send(json.dumps({
                 "type": "disconnect"
             }))
 

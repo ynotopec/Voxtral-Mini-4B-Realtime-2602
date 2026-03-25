@@ -1,27 +1,20 @@
 # Overview
 
-This repository provides a small FastAPI gateway that exposes OpenAI-compatible realtime endpoints and forwards websocket traffic to a local vLLM Voxtral backend.
+This repository provides lightweight operational automation for running Voxtral on the **native vLLM OpenAI-compatible server**.
 
 ## What is included
 
-- `main.py`: FastAPI + websocket bridge.
-- `scripts/manage.sh`: lifecycle automation (`install`, `up`, `down`, `restart`, `status`, `logs`).
+- `scripts/manage.sh`: lifecycle automation (`install`, `up`, `down`, `restart`, `status`, `logs`, `systemd-install`).
 - `Makefile`: ergonomic command aliases.
+- `run.sh`: foreground watchdog that ensures the vLLM process stays alive.
 - `client_example.py`: local websocket client examples.
 
 ## Runtime flow
 
-1. Client connects to `WS /v1/realtime`.
-2. Gateway creates a local session id.
-3. Audio/text events are forwarded to vLLM (`ws://localhost:${REALTIME_PORT}`).
-4. Gateway relays realtime events back to the client.
+1. `scripts/manage.sh up` reads `.env`.
+2. It starts `vllm serve` directly with model/device/host/port.
+3. Clients connect straight to vLLM OpenAI-compatible endpoints.
 
-## Why this repo is intentionally small
+## Design goal
 
-The project favors operational simplicity over framework complexity:
-
-- one app process (`main.py`)
-- one management script (`scripts/manage.sh`)
-- one command entrypoint (`make ...`)
-
-Use `make help` to discover all supported operations.
+Keep the repository small and automatable by avoiding custom gateway logic.
