@@ -42,6 +42,8 @@ PORT=8000
 MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
 DEVICE=cuda
 VLLM_API_KEY=
+VLLM_DISABLE_COMPILE_CACHE=1
+VLLM_COMPILATION_CONFIG='{"cudagraph_mode":"PIECEWISE"}'
 SYSTEMD_USER=
 EOT
   fi
@@ -57,6 +59,7 @@ ensure_env_file() {
 install_deps() {
   "${VENV_DIR}/bin/python" -m pip install --upgrade pip
   "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" -r requirements.txt
+  "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --upgrade "vllm" "mistral-common>=1.9.0"
 }
 
 ensure_pyairports_module() {
@@ -190,6 +193,8 @@ start_vllm() {
   local device_raw="${DEVICE:-cuda}"
   local device="${device_raw}"
   local api_key="${VLLM_API_KEY:-}"
+  local vllm_disable_compile_cache="${VLLM_DISABLE_COMPILE_CACHE:-1}"
+  local vllm_compilation_config="${VLLM_COMPILATION_CONFIG:-{\"cudagraph_mode\":\"PIECEWISE\"}}"
   local cuda_visible_devices=""
 
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
@@ -205,12 +210,19 @@ start_vllm() {
   if [[ -n "${api_key}" ]]; then
     cmd+=(--api-key "${api_key}")
   fi
-
-  if [[ -n "${cuda_visible_devices}" ]]; then
-    start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" env CUDA_VISIBLE_DEVICES="${cuda_visible_devices}" "${cmd[@]}"
-  else
-    start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${cmd[@]}"
+  if [[ -n "${vllm_compilation_config}" ]]; then
+    cmd+=(--compilation_config "${vllm_compilation_config}")
   fi
+
+  local env_cmd=(env)
+  if [[ -n "${cuda_visible_devices}" ]]; then
+    env_cmd+=("CUDA_VISIBLE_DEVICES=${cuda_visible_devices}")
+  fi
+  if [[ -n "${vllm_disable_compile_cache}" ]]; then
+    env_cmd+=("VLLM_DISABLE_COMPILE_CACHE=${vllm_disable_compile_cache}")
+  fi
+
+  start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${env_cmd[@]}" "${cmd[@]}"
 
   # Validate that the process survives initial startup before claiming availability.
   local pid
@@ -238,6 +250,10 @@ start_vllm() {
 
   echo "vLLM failed to stay running during startup. Check ${PID_DIR}/vllm.log for details." >&2
   [[ -f "${PID_DIR}/vllm.log" ]] && tail -n 40 "${PID_DIR}/vllm.log" >&2 || true
+  if [[ -f "${PID_DIR}/vllm.log" ]] && grep -q "assert \"factor\" in rope_scaling" "${PID_DIR}/vllm.log"; then
+    echo "Detected a known compatibility issue with older vLLM builds (rope_scaling assertion)." >&2
+    echo "Run: make upgrade  (this now forces vllm + mistral-common upgrades)." >&2
+  fi
   rm -f "${VLLM_PID_FILE}"
   return 1
 }

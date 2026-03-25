@@ -59,6 +59,8 @@ Variables:
 - `MODEL_ID` (model to serve)
 - `DEVICE` (e.g. `cuda`; `cuda:0` is also accepted and mapped to `CUDA_VISIBLE_DEVICES=0`)
 - `VLLM_API_KEY` (optional API key passed to `vllm serve --api-key`)
+- `VLLM_DISABLE_COMPILE_CACHE` (defaults to `1`, as recommended in Voxtral realtime serving examples)
+- `VLLM_COMPILATION_CONFIG` (defaults to `{"cudagraph_mode":"PIECEWISE"}` for Voxtral realtime compatibility)
 - `SYSTEMD_USER` (Linux user account that the systemd service should run as; defaults to current user)
 
 ## API surface
