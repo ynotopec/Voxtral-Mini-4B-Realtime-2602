@@ -12,7 +12,6 @@ ENV_FILE=".env"
 ENV_EXAMPLE_FILE=".env.example"
 PID_DIR=".run"
 VLLM_PID_FILE="${PID_DIR}/vllm.pid"
-API_PID_FILE="${PID_DIR}/api.pid"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
 
@@ -39,9 +38,9 @@ ensure_env_example() {
     cat > "${ENV_EXAMPLE_FILE}" <<'EOT'
 HOST=0.0.0.0
 PORT=8000
-REALTIME_PORT=9000
 MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
 DEVICE=cuda:0
+VLLM_API_KEY=
 EOT
   fi
 }
@@ -126,26 +125,22 @@ start_process() {
 }
 
 start_vllm() {
-  local realtime_port="${REALTIME_PORT:-9000}"
-  local model_id="${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}"
-  local device="${DEVICE:-cuda:0}"
-
-  start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" \
-    "${VENV_DIR}/bin/vllm" serve "${model_id}" --port "${realtime_port}" --device "${device}"
-}
-
-start_api() {
   local host="${HOST:-0.0.0.0}"
   local port="${PORT:-8000}"
+  local model_id="${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}"
+  local device="${DEVICE:-cuda:0}"
+  local api_key="${VLLM_API_KEY:-}"
 
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
   [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
 
-  start_process "API" "${API_PID_FILE}" "${PID_DIR}/api.log" \
-    env HOST="${host}" PORT="${port}" REALTIME_PORT="${REALTIME_PORT:-9000}" \
-    "${VENV_DIR}/bin/python" main.py
+  local cmd=("${VENV_DIR}/bin/vllm" serve "${model_id}" --host "${host}" --port "${port}" --device "${device}")
+  if [[ -n "${api_key}" ]]; then
+    cmd+=(--api-key "${api_key}")
+  fi
 
-  echo "API available on ${host}:${port}"
+  start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${cmd[@]}"
+  echo "vLLM available on ${host}:${port}"
 }
 
 stop_from_pid_file() {
@@ -168,50 +163,22 @@ stop_from_pid_file() {
   rm -f "${pid_file}"
 }
 
-print_service_status() {
-  local name="$1"
-  local pid_file="$2"
-  local log_file="$3"
-
-  if is_running "${pid_file}"; then
-    echo "${name}: running (pid $(cat "${pid_file}"))"
-  elif [[ -f "${pid_file}" ]]; then
-    echo "${name}: stale pid file ($(cat "${pid_file}"))"
-  else
-    echo "${name}: stopped"
-  fi
-
-  if [[ -f "${log_file}" ]]; then
-    echo "  log: ${log_file}"
-  fi
-}
-
 status() {
-  print_service_status "api" "${API_PID_FILE}" "${PID_DIR}/api.log"
-  print_service_status "vllm" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log"
+  if is_running "${VLLM_PID_FILE}"; then
+    echo "vllm: running (pid $(cat "${VLLM_PID_FILE}"))"
+  elif [[ -f "${VLLM_PID_FILE}" ]]; then
+    echo "vllm: stale pid file ($(cat "${VLLM_PID_FILE}"))"
+  else
+    echo "vllm: stopped"
+  fi
+
+  if [[ -f "${PID_DIR}/vllm.log" ]]; then
+    echo "  log: ${PID_DIR}/vllm.log"
+  fi
 }
 
 logs() {
-  local service="${1:-all}"
-  case "${service}" in
-    api)
-      tail -n 80 "${PID_DIR}/api.log"
-      ;;
-    vllm)
-      tail -n 80 "${PID_DIR}/vllm.log"
-      ;;
-    all)
-      echo "=== api.log ==="
-      [[ -f "${PID_DIR}/api.log" ]] && tail -n 40 "${PID_DIR}/api.log" || echo "(missing)"
-      echo
-      echo "=== vllm.log ==="
-      [[ -f "${PID_DIR}/vllm.log" ]] && tail -n 40 "${PID_DIR}/vllm.log" || echo "(missing)"
-      ;;
-    *)
-      echo "Unknown service '${service}'. Use: api|vllm|all" >&2
-      exit 1
-      ;;
-  esac
+  tail -n 80 "${PID_DIR}/vllm.log"
 }
 
 usage() {
@@ -220,12 +187,12 @@ Usage: scripts/manage.sh <action> [project_name] [ip] [port]
 
 Actions:
   install   Create venv, bootstrap .env, and install dependencies
-  up        Start vLLM + API
-  down      Stop API + vLLM
-  restart   Restart API + vLLM
+  up        Start vLLM OpenAI-compatible server
+  down      Stop vLLM
+  restart   Restart vLLM
   upgrade   Upgrade dependencies
-  status    Show process and log status
-  logs      Show logs (pass api|vllm|all as arg #3)
+  status    Show vLLM process and log status
+  logs      Show vLLM logs
   systemd-install   Install and start a systemd user service (uses [ip] [port] if provided)
   systemd-remove    Stop and remove the systemd user service
   help      Show this help
@@ -254,18 +221,13 @@ install_systemd_user_service() {
 
   cat > "${SYSTEMD_UNIT_FILE}" <<EOT
 [Unit]
-Description=${PROJECT_NAME} API + vLLM service
+Description=${PROJECT_NAME} vLLM OpenAI-compatible server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=${PWD}
-Environment=HOST=${host}
-Environment=PORT=${port}
-Environment=REALTIME_PORT=${REALTIME_PORT:-9000}
-Environment=MODEL_ID=${MODEL_ID:-mistralai/Voxtral-Mini-4B-Realtime-2602}
-Environment=DEVICE=${DEVICE:-cuda:0}
 ExecStart=${PWD}/scripts/manage.sh up ${PROJECT_NAME} ${host} ${port}
 ExecStop=${PWD}/scripts/manage.sh down ${PROJECT_NAME}
 Restart=always
@@ -307,20 +269,16 @@ case "${ACTION}" in
     read_env
     ensure_runtime_deps
     start_vllm
-    start_api
     ;;
   down)
-    stop_from_pid_file "api" "${API_PID_FILE}"
     stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
     ;;
   restart)
-    stop_from_pid_file "api" "${API_PID_FILE}"
     stop_from_pid_file "vllm" "${VLLM_PID_FILE}"
     create_venv
     read_env
     ensure_runtime_deps
     start_vllm
-    start_api
     ;;
   upgrade)
     create_venv
@@ -331,7 +289,7 @@ case "${ACTION}" in
     status
     ;;
   logs)
-    logs "${3:-all}"
+    logs
     ;;
   systemd-install)
     install_systemd_user_service
