@@ -20,9 +20,11 @@ make status
 make logs
 make restart
 make down
+make uninstall
 make systemd-install
 make systemd-install 0.0.0.0 8010
 make systemd-remove
+./scripts/uninstall.sh
 ```
 
 ## Make targets
@@ -30,6 +32,7 @@ make systemd-remove
 ```bash
 make help                 # concise command list
 make install              # create ~/venv/<repo-name> + install deps + bootstrap .env
+make uninstall            # stop service + remove venv/.run + remove systemd user unit
 make up [host] [port]     # start vLLM OpenAI-compatible server
 make down                 # stop vLLM
 make restart              # restart vLLM

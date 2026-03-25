@@ -278,6 +278,7 @@ Usage: scripts/manage.sh <action> [project_name] [ip] [port]
 
 Actions:
   install   Create venv, bootstrap .env, and install dependencies
+  uninstall Stop services and remove local runtime artifacts (venv, pid/logs, systemd user unit)
   up        Start vLLM OpenAI-compatible server
   down      Stop vLLM
   restart   Restart vLLM
@@ -288,6 +289,19 @@ Actions:
   systemd-remove    Stop and remove the systemd user service
   help      Show this help
 EOT
+}
+
+uninstall_all() {
+  stop_from_pid_file "vllm" "${VLLM_PID_FILE}" || true
+
+  # Remove systemd user unit if present (best effort).
+  if command -v systemctl >/dev/null 2>&1; then
+    remove_systemd_user_service || true
+  fi
+
+  rm -rf "${PID_DIR}" "${VENV_DIR}"
+  echo "Removed runtime directory: ${PID_DIR}"
+  echo "Removed virtual environment: ${VENV_DIR}"
 }
 
 ensure_systemd_user_ready() {
@@ -390,6 +404,9 @@ case "${ACTION}" in
     create_venv
     ensure_env_file
     install_deps
+    ;;
+  uninstall)
+    uninstall_all
     ;;
   up)
     create_venv

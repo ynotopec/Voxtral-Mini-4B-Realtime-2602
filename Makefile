@@ -6,11 +6,12 @@ PYTHON ?= $(HOME)/venv/$(PROJECT_NAME)/bin/python
 UP_IP := $(word 2,$(MAKECMDGOALS))
 UP_PORT := $(word 3,$(MAKECMDGOALS))
 
-.PHONY: help install up down restart upgrade status logs systemd-install systemd-remove check clean
+.PHONY: help install uninstall up down restart upgrade status logs systemd-install systemd-remove check clean
 
 help:
 	@echo "Targets:"
 	@echo "  make install            # create venv + install deps"
+	@echo "  make uninstall          # stop service + remove venv/.run/systemd user unit"
 	@echo "  make up [IP] [PORT]     # start vLLM OpenAI-compatible server"
 	@echo "  make down               # stop vLLM"
 	@echo "  make restart            # restart vLLM"
@@ -23,6 +24,9 @@ help:
 
 install:
 	$(MANAGE) install "$(PROJECT_NAME)"
+
+uninstall:
+	$(MANAGE) uninstall "$(PROJECT_NAME)"
 
 up:
 	$(MANAGE) up "$(PROJECT_NAME)" "$(UP_IP)" "$(UP_PORT)"
