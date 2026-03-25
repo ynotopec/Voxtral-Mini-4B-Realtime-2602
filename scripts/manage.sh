@@ -12,8 +12,9 @@ ENV_FILE=".env"
 ENV_EXAMPLE_FILE=".env.example"
 PID_DIR=".run"
 VLLM_PID_FILE="${PID_DIR}/vllm.pid"
-SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
-SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
+SYSTEMD_SYSTEM_DIR="/etc/systemd/system"
+SYSTEMD_UNIT_FILE="${SYSTEMD_SYSTEM_DIR}/${PROJECT_NAME}.service"
+SYSTEMD_USER_NAME="${USER:-$(id -un)}"
 
 ensure_uv() {
   if ! command -v "${UV_BIN}" >/dev/null 2>&1; then
@@ -41,6 +42,7 @@ PORT=8000
 MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
 DEVICE=cuda:0
 VLLM_API_KEY=
+SYSTEMD_USER=
 EOT
   fi
 }
@@ -108,18 +110,55 @@ is_running() {
   kill -0 "${pid}" >/dev/null 2>&1 || return 1
 
   # Ensure the pid belongs to a vLLM serve process, not an unrelated reused pid.
+  is_vllm_server_pid "${pid}"
+}
+
+is_vllm_server_pid() {
+  local pid="$1"
   local cmdline
   cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-  [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *"serve"* ]]
+
+  # Started via CLI: "vllm serve <model>"
+  if [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *" serve "* ]]; then
+    return 0
+  fi
+
+  # Some launches re-exec as a python module.
+  if [[ "${cmdline}" == *"vllm.entrypoints.openai.api_server"* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+find_vllm_descendant_pid() {
+  local parent_pid="$1"
+  local child
+  local children_file="/proc/${parent_pid}/task/${parent_pid}/children"
+  [[ -r "${children_file}" ]] || return 1
+
+  # shellcheck disable=SC2207
+  local children=($(cat "${children_file}"))
+  for child in "${children[@]}"; do
+    [[ -n "${child}" ]] || continue
+    if is_vllm_server_pid "${child}"; then
+      echo "${child}"
+      return 0
+    fi
+    if find_vllm_descendant_pid "${child}" >/dev/null 2>&1; then
+      find_vllm_descendant_pid "${child}"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 find_running_vllm_pid() {
   local pid
   for pid in /proc/[0-9]*; do
     pid="${pid#/proc/}"
-    local cmdline
-    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-    if [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *" serve "* ]]; then
+    if is_vllm_server_pid "${pid}"; then
       echo "${pid}"
       return 0
     fi
@@ -164,8 +203,16 @@ start_vllm() {
   # Validate that the process survives initial startup before claiming availability.
   local pid
   pid="$(cat "${VLLM_PID_FILE}")"
+  local resolved_pid="${pid}"
   local tries=0
   while (( tries < 10 )); do
+    if find_vllm_descendant_pid "${pid}" >/dev/null 2>&1; then
+      resolved_pid="$(find_vllm_descendant_pid "${pid}")"
+      if [[ "${resolved_pid}" != "$(cat "${VLLM_PID_FILE}")" ]]; then
+        echo "${resolved_pid}" > "${VLLM_PID_FILE}"
+      fi
+    fi
+
     if is_running "${VLLM_PID_FILE}"; then
       echo "vLLM available on ${host}:${port}"
       return 0
@@ -231,16 +278,30 @@ Usage: scripts/manage.sh <action> [project_name] [ip] [port]
 
 Actions:
   install   Create venv, bootstrap .env, and install dependencies
+  uninstall Stop services and remove local runtime artifacts (venv, pid/logs, systemd unit)
   up        Start vLLM OpenAI-compatible server
   down      Stop vLLM
   restart   Restart vLLM
   upgrade   Upgrade dependencies
   status    Show vLLM process and log status
   logs      Show vLLM logs
-  systemd-install   Install and start a systemd user service (uses [ip] [port] if provided)
-  systemd-remove    Stop and remove the systemd user service
+  systemd-install   Install and start a systemd service in /etc/systemd/system (uses [ip] [port] if provided)
+  systemd-remove    Stop and remove the systemd service from /etc/systemd/system
   help      Show this help
 EOT
+}
+
+uninstall_all() {
+  stop_from_pid_file "vllm" "${VLLM_PID_FILE}" || true
+
+  # Remove systemd user unit if present (best effort).
+  if command -v systemctl >/dev/null 2>&1; then
+    remove_systemd_user_service || true
+  fi
+
+  rm -rf "${PID_DIR}" "${VENV_DIR}"
+  echo "Removed runtime directory: ${PID_DIR}"
+  echo "Removed virtual environment: ${VENV_DIR}"
 }
 
 ensure_systemd_user_ready() {
@@ -250,10 +311,36 @@ ensure_systemd_user_ready() {
   fi
 }
 
+resolve_systemd_paths() {
+  local target_user="${SYSTEMD_USER:-}"
+  if [[ -z "${target_user}" ]]; then
+    target_user="${USER:-$(id -un)}"
+  fi
+
+  if ! id -u "${target_user}" >/dev/null 2>&1; then
+    echo "Could not resolve SYSTEMD_USER=${target_user}" >&2
+    exit 1
+  fi
+
+  SYSTEMD_USER_NAME="${target_user}"
+  SYSTEMD_UNIT_FILE="${SYSTEMD_SYSTEM_DIR}/${PROJECT_NAME}.service"
+}
+
+systemctl_user_cmd() {
+  if command -v sudo >/dev/null 2>&1; then
+    sudo systemctl "$@"
+    return
+  fi
+
+  echo "sudo is required to manage systemd services in ${SYSTEMD_SYSTEM_DIR}." >&2
+  exit 1
+}
+
 install_systemd_user_service() {
   ensure_systemd_user_ready
   create_venv
   read_env
+  resolve_systemd_paths
 
   local host="${HOST:-0.0.0.0}"
   local port="${PORT:-8000}"
@@ -261,9 +348,12 @@ install_systemd_user_service() {
   [[ -n "${UP_IP}" ]] && host="${UP_IP}"
   [[ -n "${UP_PORT}" ]] && port="${UP_PORT}"
 
-  mkdir -p "${SYSTEMD_USER_DIR}" "${PID_DIR}"
+  mkdir -p "${PID_DIR}"
 
-  cat > "${SYSTEMD_UNIT_FILE}" <<EOT
+  local tmp_unit_file
+  tmp_unit_file="$(mktemp)"
+
+  cat > "${tmp_unit_file}" <<EOT
 [Unit]
 Description=${PROJECT_NAME} vLLM OpenAI-compatible server
 After=network-online.target
@@ -271,6 +361,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=${SYSTEMD_USER_NAME}
 WorkingDirectory=${PWD}
 ExecStart=${PWD}/scripts/manage.sh up ${PROJECT_NAME} ${host} ${port}
 ExecStop=${PWD}/scripts/manage.sh down ${PROJECT_NAME}
@@ -278,28 +369,44 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOT
 
-  systemctl --user daemon-reload
-  systemctl --user enable --now "${PROJECT_NAME}.service"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo install -m 0644 "${tmp_unit_file}" "${SYSTEMD_UNIT_FILE}"
+  else
+    rm -f "${tmp_unit_file}"
+    echo "sudo is required to install ${SYSTEMD_UNIT_FILE}" >&2
+    exit 1
+  fi
+  rm -f "${tmp_unit_file}"
 
-  echo "Installed and started systemd user service: ${PROJECT_NAME}.service"
+  systemctl_user_cmd daemon-reload
+  systemctl_user_cmd enable --now "${PROJECT_NAME}.service"
+
+  echo "Installed and started systemd service: ${PROJECT_NAME}.service (runs as user: ${SYSTEMD_USER_NAME})"
   echo "Host/port configured: ${host}:${port}"
   echo "Unit file: ${SYSTEMD_UNIT_FILE}"
 }
 
 remove_systemd_user_service() {
   ensure_systemd_user_ready
+  read_env
+  resolve_systemd_paths
 
-  if systemctl --user list-unit-files | awk '{print $1}' | grep -qx "${PROJECT_NAME}.service"; then
-    systemctl --user disable --now "${PROJECT_NAME}.service" || true
+  if systemctl_user_cmd list-unit-files | awk '{print $1}' | grep -qx "${PROJECT_NAME}.service"; then
+    systemctl_user_cmd disable --now "${PROJECT_NAME}.service" || true
   fi
 
-  rm -f "${SYSTEMD_UNIT_FILE}"
-  systemctl --user daemon-reload
-  systemctl --user reset-failed
-  echo "Removed systemd user service: ${PROJECT_NAME}.service"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo rm -f "${SYSTEMD_UNIT_FILE}"
+  else
+    echo "sudo is required to remove ${SYSTEMD_UNIT_FILE}" >&2
+    exit 1
+  fi
+  systemctl_user_cmd daemon-reload
+  systemctl_user_cmd reset-failed
+  echo "Removed systemd service: ${PROJECT_NAME}.service"
 }
 
 case "${ACTION}" in
@@ -307,6 +414,9 @@ case "${ACTION}" in
     create_venv
     ensure_env_file
     install_deps
+    ;;
+  uninstall)
+    uninstall_all
     ;;
   up)
     create_venv
