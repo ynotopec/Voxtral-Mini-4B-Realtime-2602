@@ -119,7 +119,7 @@ find_running_vllm_pid() {
     pid="${pid#/proc/}"
     local cmdline
     cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-    if [[ "${cmdline}" == *"/bin/vllm"* && "${cmdline}" == *" serve "* ]]; then
+    if [[ "${cmdline}" == *"vllm"* && "${cmdline}" == *" serve "* ]]; then
       echo "${pid}"
       return 0
     fi
@@ -160,7 +160,27 @@ start_vllm() {
   fi
 
   start_process "vLLM" "${VLLM_PID_FILE}" "${PID_DIR}/vllm.log" "${cmd[@]}"
-  echo "vLLM available on ${host}:${port}"
+
+  # Validate that the process survives initial startup before claiming availability.
+  local pid
+  pid="$(cat "${VLLM_PID_FILE}")"
+  local tries=0
+  while (( tries < 10 )); do
+    if is_running "${VLLM_PID_FILE}"; then
+      echo "vLLM available on ${host}:${port}"
+      return 0
+    fi
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+    tries=$((tries + 1))
+  done
+
+  echo "vLLM failed to stay running during startup. Check ${PID_DIR}/vllm.log for details." >&2
+  [[ -f "${PID_DIR}/vllm.log" ]] && tail -n 40 "${PID_DIR}/vllm.log" >&2 || true
+  rm -f "${VLLM_PID_FILE}"
+  return 1
 }
 
 stop_from_pid_file() {
