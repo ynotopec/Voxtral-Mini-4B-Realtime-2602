@@ -14,6 +14,7 @@ PID_DIR=".run"
 VLLM_PID_FILE="${PID_DIR}/vllm.pid"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
+SYSTEMD_USER_NAME="${USER:-$(id -un)}"
 
 ensure_uv() {
   if ! command -v "${UV_BIN}" >/dev/null 2>&1; then
@@ -41,6 +42,7 @@ PORT=8000
 MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
 DEVICE=cuda:0
 VLLM_API_KEY=
+SYSTEMD_USER=
 EOT
   fi
 }
@@ -295,10 +297,44 @@ ensure_systemd_user_ready() {
   fi
 }
 
+resolve_systemd_paths() {
+  local target_user="${SYSTEMD_USER:-}"
+  if [[ -z "${target_user}" ]]; then
+    target_user="${USER:-$(id -un)}"
+  fi
+
+  local target_home
+  target_home="$(getent passwd "${target_user}" | cut -d: -f6 || true)"
+  if [[ -z "${target_home}" ]]; then
+    echo "Could not resolve home directory for SYSTEMD_USER=${target_user}" >&2
+    exit 1
+  fi
+
+  SYSTEMD_USER_NAME="${target_user}"
+  SYSTEMD_USER_DIR="${target_home}/.config/systemd/user"
+  SYSTEMD_UNIT_FILE="${SYSTEMD_USER_DIR}/${PROJECT_NAME}.service"
+}
+
+systemctl_user_cmd() {
+  if [[ "${SYSTEMD_USER_NAME}" == "${USER:-$(id -un)}" ]]; then
+    systemctl --user "$@"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -u "${SYSTEMD_USER_NAME}" systemctl --user "$@"
+    return
+  fi
+
+  echo "sudo is required to manage SYSTEMD_USER=${SYSTEMD_USER_NAME} from this account." >&2
+  exit 1
+}
+
 install_systemd_user_service() {
   ensure_systemd_user_ready
   create_venv
   read_env
+  resolve_systemd_paths
 
   local host="${HOST:-0.0.0.0}"
   local port="${PORT:-8000}"
@@ -326,25 +362,27 @@ RestartSec=5
 WantedBy=default.target
 EOT
 
-  systemctl --user daemon-reload
-  systemctl --user enable --now "${PROJECT_NAME}.service"
+  systemctl_user_cmd daemon-reload
+  systemctl_user_cmd enable --now "${PROJECT_NAME}.service"
 
-  echo "Installed and started systemd user service: ${PROJECT_NAME}.service"
+  echo "Installed and started systemd user service: ${PROJECT_NAME}.service (user: ${SYSTEMD_USER_NAME})"
   echo "Host/port configured: ${host}:${port}"
   echo "Unit file: ${SYSTEMD_UNIT_FILE}"
 }
 
 remove_systemd_user_service() {
   ensure_systemd_user_ready
+  read_env
+  resolve_systemd_paths
 
-  if systemctl --user list-unit-files | awk '{print $1}' | grep -qx "${PROJECT_NAME}.service"; then
-    systemctl --user disable --now "${PROJECT_NAME}.service" || true
+  if systemctl_user_cmd list-unit-files | awk '{print $1}' | grep -qx "${PROJECT_NAME}.service"; then
+    systemctl_user_cmd disable --now "${PROJECT_NAME}.service" || true
   fi
 
   rm -f "${SYSTEMD_UNIT_FILE}"
-  systemctl --user daemon-reload
-  systemctl --user reset-failed
-  echo "Removed systemd user service: ${PROJECT_NAME}.service"
+  systemctl_user_cmd daemon-reload
+  systemctl_user_cmd reset-failed
+  echo "Removed systemd user service: ${PROJECT_NAME}.service (user: ${SYSTEMD_USER_NAME})"
 }
 
 case "${ACTION}" in

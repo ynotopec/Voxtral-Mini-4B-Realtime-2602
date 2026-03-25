@@ -56,6 +56,7 @@ Variables:
 - `MODEL_ID` (model to serve)
 - `DEVICE` (e.g. `cuda:0`)
 - `VLLM_API_KEY` (optional API key passed to `vllm serve --api-key`)
+- `SYSTEMD_USER` (optional user account for `make systemd-install/remove`; defaults to current user)
 
 ## API surface
 
@@ -67,5 +68,5 @@ Served directly by vLLM:
 ## Systemd
 
 - `make systemd-install [host] [port]` creates a **systemd user** unit named after the repo directory basename (for example `Voxtral-Mini-4B-Realtime-2602.service`).
-- The unit file is written to `~/.config/systemd/user/<basename>.service`.
+- The unit file is written to `<home-of-SYSTEMD_USER>/.config/systemd/user/<basename>.service` (or your own home if `SYSTEMD_USER` is unset).
 - Override bind values at install time via positional args, e.g. `make systemd-install 10.0.0.12 8000`.
